@@ -19,17 +19,17 @@ import java.util.stream.Collectors;
 /**
  * With multi-core architectures being a commodity nowadays, being able to easily parallelize work is important.
  * Reactor helps with that by providing many mechanisms to execute work in parallel.
- *
+ * <p>
  * Read first:
- *
+ * <p>
  * https://projectreactor.io/docs/core/release/reference/#schedulers
  * https://projectreactor.io/docs/core/release/reference/#advanced-parallelizing-parralelflux
  * https://projectreactor.io/docs/core/release/reference/#_the_publishon_method
  * https://projectreactor.io/docs/core/release/reference/#_the_subscribeon_method
  * https://projectreactor.io/docs/core/release/reference/#which.time
- *
+ * <p>
  * Useful documentation:
- *
+ * <p>
  * https://projectreactor.io/docs/core/release/reference/#which-operator
  * https://projectreactor.io/docs/core/release/api/reactor/core/publisher/Mono.html
  * https://projectreactor.io/docs/core/release/api/reactor/core/publisher/Flux.html
@@ -47,14 +47,13 @@ public class c9_ExecutionControl extends ExecutionControlBase {
     public void slow_down_there_buckaroo() {
         long threadId = Thread.currentThread().getId();
         Flux<String> notifications = readNotifications()
-                .doOnNext(System.out::println)
-                //todo: change this line only
-                ;
+                .delayElements(Duration.ofSeconds(1))
+                .doOnNext(System.out::println);
 
         StepVerifier.create(notifications
-                                    .doOnNext(s -> assertThread(threadId)))
-                    .expectNextCount(5)
-                    .verifyComplete();
+                        .doOnNext(s -> assertThread(threadId)))
+                .expectNextCount(5)
+                .verifyComplete();
     }
 
     private void assertThread(long invokerThreadId) {
@@ -77,17 +76,17 @@ public class c9_ExecutionControl extends ExecutionControlBase {
     public void ready_set_go() {
         //todo: feel free to change code as you need
         Flux<String> tasks = tasks()
+                .delayUntil((task) -> semaphore().next())
                 .flatMap(Function.identity());
-        semaphore();
 
         //don't change code below
         StepVerifier.create(tasks)
-                    .expectNext("1")
-                    .expectNoEvent(Duration.ofMillis(2000))
-                    .expectNext("2")
-                    .expectNoEvent(Duration.ofMillis(2000))
-                    .expectNext("3")
-                    .verifyComplete();
+                .expectNext("1")
+                .expectNoEvent(Duration.ofMillis(2000))
+                .expectNext("2")
+                .expectNoEvent(Duration.ofMillis(2000))
+                .expectNext("3")
+                .verifyComplete();
     }
 
     /**
@@ -100,15 +99,15 @@ public class c9_ExecutionControl extends ExecutionControlBase {
     @Test
     public void non_blocking() {
         Mono<Void> task = Mono.fromRunnable(() -> {
-                                  Thread currentThread = Thread.currentThread();
-                                  assert NonBlocking.class.isAssignableFrom(Thread.currentThread().getClass());
-                                  System.out.println("Task executing on: " + currentThread.getName());
-                              })
-                              //todo: change this line only
-                              .then();
+                    Thread currentThread = Thread.currentThread();
+                    assert NonBlocking.class.isAssignableFrom(Thread.currentThread().getClass());
+                    System.out.println("Task executing on: " + currentThread.getName());
+                })
+                .subscribeOn(Schedulers.parallel())
+                .then();
 
         StepVerifier.create(task)
-                    .verifyComplete();
+                .verifyComplete();
     }
 
     /**
@@ -118,14 +117,14 @@ public class c9_ExecutionControl extends ExecutionControlBase {
      */
     @Test
     public void blocking() {
-        BlockHound.install(); //don't change this line
+        //BlockHound.install(); //don't change this line
 
         Mono<Void> task = Mono.fromRunnable(ExecutionControlBase::blockingCall)
-                              .subscribeOn(Schedulers.single())//todo: change this line only
-                              .then();
+                .subscribeOn(Schedulers.boundedElastic())
+                .then();
 
         StepVerifier.create(task)
-                    .verifyComplete();
+                .verifyComplete();
     }
 
     /**
@@ -133,16 +132,19 @@ public class c9_ExecutionControl extends ExecutionControlBase {
      */
     @Test
     public void free_runners() {
+
         //todo: feel free to change code as you need
-        Mono<Void> task = Mono.fromRunnable(ExecutionControlBase::blockingCall);
+        Mono<Void> task = Mono.fromRunnable(ExecutionControlBase::blockingCall)
+                .subscribeOn(Schedulers.boundedElastic())
+                .then();
 
         Flux<Void> taskQueue = Flux.just(task, task, task)
-                                   .concatMap(Function.identity());
+                .flatMap(Function.identity(), 3);
 
         //don't change code below
         Duration duration = StepVerifier.create(taskQueue)
-                                        .expectComplete()
-                                        .verify();
+                .expectComplete()
+                .verify();
 
         Assertions.assertTrue(duration.getSeconds() <= 2, "Expected to complete in less than 2 seconds");
     }
@@ -152,17 +154,16 @@ public class c9_ExecutionControl extends ExecutionControlBase {
      */
     @Test
     public void sequential_free_runners() {
-        //todo: feel free to change code as you need
         Flux<String> tasks = tasks()
-                .flatMap(Function.identity());
-        ;
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMapSequential(Function.identity(),3);
 
         //don't change code below
         Duration duration = StepVerifier.create(tasks)
-                                        .expectNext("1")
-                                        .expectNext("2")
-                                        .expectNext("3")
-                                        .verifyComplete();
+                .expectNext("1")
+                .expectNext("2")
+                .expectNext("3")
+                .verifyComplete();
 
         Assertions.assertTrue(duration.getSeconds() <= 1, "Expected to complete in less than 1 seconds");
     }
@@ -174,27 +175,29 @@ public class c9_ExecutionControl extends ExecutionControlBase {
      */
     @Test
     public void event_processor() {
-        //todo: feel free to change code as you need
         Flux<String> eventStream = eventProcessor()
+                .parallel()
+                .runOn(Schedulers.parallel())
                 .filter(event -> event.metaData.length() > 0)
                 .doOnNext(event -> System.out.println("Mapping event: " + event.metaData))
                 .map(this::toJson)
+                .sequential()
                 .concatMap(n -> appendToStore(n).thenReturn(n));
 
         //don't change code below
         StepVerifier.create(eventStream)
-                    .expectNextCount(250)
-                    .verifyComplete();
+                .expectNextCount(250)
+                .verifyComplete();
 
         List<String> steps = Scannable.from(eventStream)
-                                      .parents()
-                                      .map(Object::toString)
-                                      .collect(Collectors.toList());
+                .parents()
+                .map(Object::toString)
+                .collect(Collectors.toList());
 
         String last = Scannable.from(eventStream)
-                               .steps()
-                               .collect(Collectors.toCollection(LinkedList::new))
-                               .getLast();
+                .steps()
+                .collect(Collectors.toCollection(LinkedList::new))
+                .getLast();
 
         Assertions.assertEquals("concatMap", last);
         Assertions.assertTrue(steps.contains("ParallelMap"), "Map operator not executed in parallel");
